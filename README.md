@@ -16,7 +16,7 @@ Two scripts live here:
 |---|---|
 | [`student-setup.sh`](student-setup.sh) | Installs the dev tools: nvm+Node 22, uv+Python 3.12, git, Claude Code, opencode |
 | [`api-setup.sh`](api-setup.sh) | Configures Claude Code + opencode to use the Vibe proxy with your key |
-| [`doctor.sh`](doctor.sh) | Chapter-0 pre-class diagnostic — checks env + gh + claude proxy, renders SVG/PNG report card to drop in `#ch-0-intro` |
+| [`doctor.sh`](doctor.sh) | Chapter doctor — `bash doctor.sh` (ch-0 pre-class) or `bash doctor.sh ch-1` (homework check + gist post). Replaces the old check-ch1.sh (kept as a thin shim). |
 
 ---
 

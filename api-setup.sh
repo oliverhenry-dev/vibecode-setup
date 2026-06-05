@@ -204,8 +204,10 @@ fi
 SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd || echo .)"
 for KF in "$SELF_DIR/vibe-key.env" "./vibe-key.env"; do
   if [ -f "$KF" ]; then
-    # shellcheck disable=SC1090
-    set -a; . "$KF"; set +a
+    set -a
+    # shellcheck source=/dev/null
+    . "$KF"
+    set +a
     echo "Loaded key file: $KF"; break
   fi
 done

@@ -71,6 +71,7 @@ say()  { printf '%s%s%s\n' "$c_bold" "$*" "$c_reset"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # ---------- load vibe-key.env (for proxy curl fallback) ----------
+# shellcheck source=/dev/null
 if [ -f "$KEYFILE" ]; then set -a; . "$KEYFILE" 2>/dev/null; set +a; fi
 VIBE_PROXY="${VIBE_PROXY:-}"; VIBE_KEY="${VIBE_KEY:-}"
 

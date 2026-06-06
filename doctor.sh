@@ -223,6 +223,12 @@ if [ "$CHAPTER" = "ch-1" ]; then
 fi
 
 # ---------- 7. results JSON ----------
+# ch1 block only when actually run (ch-1); keeps it off the ch-0 card
+CH1_JSON=""
+if [ "$CHAPTER" = "ch-1" ]; then
+  CH1_JSON="  \"ch1\": { \"profile\": \"$CH1_PROFILE\", \"pr_url\": \"$CH1_PR\", \"pr_state\": \"$CH1_PR_STATE\" },
+"
+fi
 cat > "$JSON" <<EOF
 {
   "ts": "$TS",
@@ -237,8 +243,7 @@ cat > "$JSON" <<EOF
   },
   "gh": { "auth": "$GH_AUTH", "pr_probe": "$GH_PR" },
   "proxy_api": "$CL_API",
-  "ch1": { "profile": "$CH1_PROFILE", "pr_url": "$CH1_PR", "pr_state": "$CH1_PR_STATE" },
-  "score": "$checks_pass/$checks_total"
+${CH1_JSON}  "score": "$checks_pass/$checks_total"
 }
 EOF
 ok "results json: $JSON"
@@ -272,7 +277,7 @@ SVG
     [ "$NO_CLAUDE" = "1" ] && return 1
     [ "$CL_API" = "fail" ] && return 1
     local prompt out
-    prompt="Render this JSON as a single SVG badge card, 800x450, warm-amber palette (bg #fef3e2→#fde2c4, accents #d97706 #7c2d12 #9a3412), monospace, vibecode.tours footer. Output SVG only — no markdown, no fences. JSON:
+    prompt="Render this JSON as a single SVG badge card, 800x450, warm-amber palette (bg #fef3e2→#fde2c4, accents #d97706 #7c2d12 #9a3412), monospace, vibecode.tours footer. Render ONLY the fields present in the JSON — do not add sections or rows for data that is absent. Do NOT compute or invent any pass/fail tally; if you show a score, use the JSON \"score\" value exactly as given. Output SVG only — no markdown, no fences. JSON:
 $(cat "$JSON")"
     if out="$(claude -p "$prompt" --output-format text 2>/dev/null)" && [ -n "$out" ] && echo "$out" | grep -q "<svg"; then
       echo "$out" | sed -n '/<svg/,/<\/svg>/p' > "$SVG"

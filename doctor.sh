@@ -22,7 +22,6 @@
 # Flags:
 #   --non-interactive  default REPLACE on windows-claude conflict (ch-0)
 #   --keep|--replace   force conflict resolution (ch-0)
-#   --no-claude        skip claude-rendered card (ch-0)
 #   --no-post          save report.md only, no gist post (ch-1)
 #   --out DIR          output dir (default ~/.vibecode/doctor)
 #
@@ -34,13 +33,12 @@ set -u
 # ---------- args ----------
 CHAPTER="ch-0"
 if [ $# -gt 0 ] && [[ "$1" =~ ^ch-[0-9]+$ ]]; then CHAPTER="$1"; shift; fi
-NONINT=0; KEEP=0; REPLACE=0; OUTDIR="${HOME}/.vibecode/doctor"; NO_CLAUDE=0; NO_POST=0
+NONINT=0; KEEP=0; REPLACE=0; OUTDIR="${HOME}/.vibecode/doctor"; NO_POST=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --non-interactive) NONINT=1 ;;
     --keep)            KEEP=1 ;;
     --replace)         REPLACE=1 ;;
-    --no-claude)       NO_CLAUDE=1 ;;
     --no-post)         NO_POST=1 ;;
     --chapter)         CHAPTER="$2"; shift ;;
     --out)             OUTDIR="$2"; shift ;;
@@ -58,6 +56,7 @@ SVG="$OUTDIR/${CHAPTER}-report-$TS.svg"
 PNG="$OUTDIR/${CHAPTER}-report-$TS.png"
 TXT="$OUTDIR/${CHAPTER}-report-$TS.txt"
 WEBSITE_REPO="vibe-code-tours/vibe-code-tours.github.io"
+TEMPLATE_URL="https://raw.githubusercontent.com/vibe-code-tours/vibecode-setup/main/card-template.svg"
 KEYFILE="${VIBE_KEYFILE:-vibe-key.env}"
 
 # ---------- ui ----------
@@ -251,44 +250,131 @@ ok "results json: $JSON"
 # ---------- 8. card by chapter ----------
 if [ "$CHAPTER" = "ch-0" ]; then
   render_static_svg() {
-    local user="${GH_USER:-anonymous}" score="$checks_pass/$checks_total"
-    local cl_badge="✅"; [ "$CL_API" = "fail" ] && cl_badge="❌"
-    local gh_badge="✅"; [ "$GH_AUTH" = "fail" ] && gh_badge="❌"
-    cat > "$SVG" <<SVG
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450">
-  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#fef3e2"/><stop offset="1" stop-color="#fde2c4"/>
-  </linearGradient></defs>
-  <rect width="800" height="450" fill="url(#bg)"/>
-  <rect x="20" y="20" width="760" height="410" fill="none" stroke="#d97706" stroke-width="3" rx="18"/>
-  <text x="50" y="80" font-family="ui-monospace,monospace" font-size="32" font-weight="700" fill="#7c2d12">🎓 Vibe Code Doctor</text>
-  <text x="50" y="120" font-family="ui-monospace,monospace" font-size="20" fill="#9a3412">@${user}</text>
-  <text x="50" y="170" font-family="ui-monospace,monospace" font-size="18" fill="#1f2937">platform: ${PLATFORM}   claude: ${CLAUDE_LOC}</text>
-  <text x="50" y="210" font-family="ui-monospace,monospace" font-size="18" fill="#1f2937">node ${NODE_R}   npm ${NPM_R}   python ${PY_R}</text>
-  <text x="50" y="240" font-family="ui-monospace,monospace" font-size="18" fill="#1f2937">git ${GIT_R}   gh ${GH_R}   claude ${CL_R}</text>
-  <text x="50" y="290" font-family="ui-monospace,monospace" font-size="22" fill="#7c2d12">${gh_badge} github: ${GH_USER:-not-authed}</text>
-  <text x="50" y="320" font-family="ui-monospace,monospace" font-size="22" fill="#7c2d12">${cl_badge} proxy api: ${CL_API}</text>
-  <text x="50" y="380" font-family="ui-monospace,monospace" font-size="28" font-weight="700" fill="#9a3412">score ${score} — $([ "$checks_pass" = "$checks_total" ] && echo 'ready ch-1 🚀' || echo 'see #help')</text>
-  <text x="50" y="415" font-family="ui-monospace,monospace" font-size="14" fill="#a16207">vibecode.tours  ·  #ch-0  ·  ${TS}</text>
-</svg>
-SVG
-  }
-  render_claude_svg() {
-    [ "$NO_CLAUDE" = "1" ] && return 1
-    [ "$CL_API" = "fail" ] && return 1
-    local prompt out
-    prompt="Render this JSON as a single SVG badge card, 800x450, warm-amber palette (bg #fef3e2→#fde2c4, accents #d97706 #7c2d12 #9a3412), monospace, vibecode.tours footer. Render ONLY the fields present in the JSON — do not add sections or rows for data that is absent. Do NOT compute or invent any pass/fail tally; if you show a score, use the JSON \"score\" value exactly as given. Output SVG only — no markdown, no fences. JSON:
-$(cat "$JSON")"
-    if out="$(claude -p "$prompt" --output-format text 2>/dev/null)" && [ -n "$out" ] && echo "$out" | grep -q "<svg"; then
-      echo "$out" | sed -n '/<svg/,/<\/svg>/p' > "$SVG"
-      [ -s "$SVG" ] && return 0
+    local user="${GH_USER:-anonymous}"
+    local hdr_date; hdr_date="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    local r pass_n=0 fail_n=0 bg mk
+    for r in "$NODE_R" "$NPM_R" "$PY_R" "$GIT_R" "$GH_R" "$CL_R" "$GH_AUTH" "$GH_PR" "$CL_API"; do
+      if [ "$r" = "ok" ]; then pass_n=$((pass_n+1)); else fail_n=$((fail_n+1)); fi
+    done
+    if [ "$CHAPTER" = "ch-1" ]; then
+      for r in "$CH1_PROFILE" "$CH1_PR_STATE"; do
+        if [ "$r" = "ok" ]; then pass_n=$((pass_n+1)); else fail_n=$((fail_n+1)); fi
+      done
     fi
-    return 1
+
+    # system-check pills
+    local pills="" px=40 pair lbl st w
+    for pair in "node:$NODE_R:64" "npm:$NPM_R:58" "python:$PY_R:84" "git:$GIT_R:56" "gh:$GH_R:52" "claude:$CL_R:84"; do
+      lbl=${pair%%:*}; w=${pair##*:}; st=${pair#*:}; st=${st%%:*}
+      if [ "$st" = "ok" ]; then bg="#16a34a"; mk="\xe2\x9c\x93"; else bg="#dc2626"; mk="\xe2\x9c\x97"; fi
+      pills="$pills<g transform=\"translate($px,194)\"><rect width=\"$w\" height=\"26\" rx=\"13\" fill=\"$bg\"/><circle cx=\"16\" cy=\"13\" r=\"8\" fill=\"#ffffff\"/><text x=\"16\" y=\"17.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"$bg\">$mk</text><text x=\"31\" y=\"17.5\" font-size=\"13\" fill=\"#ffffff\">$lbl</text></g>"
+      px=$((px + w + 8))
+    done
+
+    # services rows
+    local IFSO="$IFS" i nm vv
+    local names="GH Auth|GH PR Probe|Proxy API" vals="$GH_AUTH|$GH_PR|$CL_API"
+    IFS='|'
+    # shellcheck disable=SC2206
+    local -a NA=($names) VA=($vals)
+    IFS="$IFSO"
+    local rows="" sy=262
+    for i in "${!NA[@]}"; do
+      nm="${NA[$i]}"; vv="${VA[$i]}"
+      if [ "$vv" = "ok" ]; then bg="#16a34a"; mk="\xe2\x9c\x93"; else bg="#dc2626"; mk="\xe2\x9c\x97"; fi
+      rows="$rows<text x=\"52\" y=\"$((sy+16))\" font-size=\"15\" fill=\"#3f2a14\">$nm</text><g transform=\"translate(250,$sy)\"><rect width=\"62\" height=\"24\" rx=\"12\" fill=\"$bg\"/><circle cx=\"14\" cy=\"12\" r=\"7.5\" fill=\"#ffffff\"/><text x=\"14\" y=\"16\" font-size=\"11\" text-anchor=\"middle\" fill=\"$bg\">$mk</text><text x=\"28\" y=\"16\" font-size=\"12\" fill=\"#ffffff\">$vv</text></g>"
+      sy=$((sy+30))
+    done
+
+    # chapter-1 section (ch-1 only)
+    local ch1svg="" cy cn cv
+    if [ "$CHAPTER" = "ch-1" ]; then
+      cy=$((sy+8))
+      ch1svg="<text x=\"40\" y=\"$((cy+12))\" font-size=\"13\" font-weight=\"700\" letter-spacing=\"1\" fill=\"#b45309\">CHAPTER 1</text><line x1=\"40\" y1=\"$((cy+18))\" x2=\"300\" y2=\"$((cy+18))\" stroke=\"#e6b27a\" stroke-width=\"1\"/>"
+      cy=$((cy+24))
+      IFS='|'; local -a CN=("Profile" "PR State") CV=("$CH1_PROFILE" "$CH1_PR_STATE"); IFS="$IFSO"
+      for i in "${!CN[@]}"; do
+        cn="${CN[$i]}"; cv="${CV[$i]}"
+        if [ "$cv" = "ok" ]; then bg="#16a34a"; mk="\xe2\x9c\x93"; else bg="#dc2626"; mk="\xe2\x9c\x97"; fi
+        ch1svg="$ch1svg<text x=\"52\" y=\"$((cy+16))\" font-size=\"15\" fill=\"#3f2a14\">$cn</text><g transform=\"translate(250,$cy)\"><rect width=\"62\" height=\"24\" rx=\"12\" fill=\"$bg\"/><circle cx=\"14\" cy=\"12\" r=\"7.5\" fill=\"#ffffff\"/><text x=\"14\" y=\"16\" font-size=\"11\" text-anchor=\"middle\" fill=\"$bg\">$mk</text><text x=\"28\" y=\"16\" font-size=\"12\" fill=\"#ffffff\">$cv</text></g>"
+        cy=$((cy+28))
+      done
+    fi
+
+    local ready="#d97706"
+    [ "$pass_n" -gt 0 ] && [ "$fail_n" -eq 0 ] && ready="#16a34a"
+
+    # --- resolve template: local file -> cached -> download -> embedded fallback ---
+    local tpl="" cache="$OUTDIR/card-template.svg"
+    if [ -f "./card-template.svg" ]; then tpl="$(cat ./card-template.svg)"
+    elif [ -f "$cache" ]; then tpl="$(cat "$cache")"
+    elif have curl && curl -fsSL "$TEMPLATE_URL" -o "$cache" 2>/dev/null && [ -s "$cache" ]; then tpl="$(cat "$cache")"
+    fi
+    if [ -z "$tpl" ]; then
+      tpl="$(cat <<'TPL'
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">
+  <!-- Vibe Code Doctor card template. Double-underscore tokens (CHAPTER, PILLS,
+       ROWS, CH1, SCORE, PASS, FAIL, READY, ...) are filled in by doctor.sh.
+       Safe to redesign; keep the injection-point tokens intact. -->
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fef3e2"/><stop offset="1" stop-color="#fde2c4"/></linearGradient></defs>
+  <rect width="800" height="450" fill="url(#bg)"/>
+  <rect x="12" y="12" width="776" height="426" fill="none" stroke="#d97706" stroke-width="3" rx="16"/>
+  <rect x="34" y="26" width="60" height="26" rx="13" fill="#d97706"/>
+  <text x="64" y="44" font-size="14" font-weight="700" text-anchor="middle" fill="#ffffff">__CHAPTER__</text>
+  <text x="110" y="44" font-size="13" fill="#a16207">__HDR_DATE__  &#183;  __PLATFORM__  &#183;  claude:__CHOICE__</text>
+  <text x="766" y="44" font-size="16" font-weight="700" text-anchor="end" fill="#9a3412">@__USER__</text>
+  <text x="40" y="80" font-size="13" font-weight="700" letter-spacing="1" fill="#b45309">ENVIRONMENT</text>
+  <line x1="40" y1="86" x2="300" y2="86" stroke="#e6b27a" stroke-width="1"/>
+  <text x="52" y="112" font-size="15" fill="#3f2a14">Platform</text>
+  <rect x="210" y="97" width="90" height="22" rx="6" fill="none" stroke="#d9a066"/><text x="222" y="112" font-size="13" fill="#7c2d12">__PLATFORM__</text>
+  <text x="52" y="140" font-size="15" fill="#3f2a14">Claude Loc</text>
+  <rect x="210" y="125" width="90" height="22" rx="6" fill="none" stroke="#d9a066"/><text x="222" y="140" font-size="13" fill="#7c2d12">__CLAUDE_LOC__</text>
+  <text x="52" y="168" font-size="15" fill="#3f2a14">Choice</text>
+  <rect x="210" y="153" width="90" height="22" rx="6" fill="none" stroke="#d9a066"/><text x="222" y="168" font-size="13" fill="#7c2d12">__CHOICE__</text>
+  <text x="40" y="184" font-size="13" font-weight="700" letter-spacing="1" fill="#b45309">SYSTEM CHECKS</text>
+  __PILLS__
+  <text x="40" y="252" font-size="13" font-weight="700" letter-spacing="1" fill="#b45309">SERVICES</text>
+  <line x1="40" y1="258" x2="300" y2="258" stroke="#e6b27a" stroke-width="1"/>
+  __ROWS__
+  __CH1__
+  <rect x="566" y="58" width="200" height="306" rx="14" fill="#fff7ec" stroke="#e6b27a"/>
+  <rect x="596" y="70" width="72" height="22" rx="11" fill="none" stroke="#d9a066"/>
+  <text x="632" y="85" font-size="12" font-weight="700" letter-spacing="1" text-anchor="middle" fill="#9a3412">SCORE</text>
+  <circle cx="666" cy="158" r="56" fill="none" stroke="#f0d2a8" stroke-width="10"/>
+  <text x="666" y="178" font-size="58" font-weight="700" text-anchor="middle" fill="#c2410c">__SCORE__</text>
+  <text x="666" y="214" font-size="13" text-anchor="middle" fill="#9a3412">checkpoints passed</text>
+  <rect x="586" y="240" width="160" height="22" rx="6" fill="#fde7cf"/>
+  <text x="596" y="255" font-size="13" font-weight="700" fill="#7c2d12">PASS</text>
+  <text x="736" y="255" font-size="13" font-weight="700" text-anchor="end" fill="#16a34a">__PASS__</text>
+  <text x="596" y="281" font-size="13" font-weight="700" fill="#7c2d12">FAIL</text>
+  <text x="736" y="281" font-size="13" font-weight="700" text-anchor="end" fill="#dc2626">__FAIL__</text>
+  <text x="586" y="308" font-size="11" fill="#a16207">CHAPTER</text><text x="746" y="308" font-size="11" text-anchor="end" fill="#7c2d12">__CHAPTER__</text>
+  <text x="586" y="326" font-size="11" fill="#a16207">PLATFORM</text><text x="746" y="326" font-size="11" text-anchor="end" fill="#7c2d12">__PLATFORM__</text>
+  <text x="586" y="344" font-size="11" fill="#a16207">CLAUDE</text><text x="746" y="344" font-size="11" text-anchor="end" fill="#7c2d12">__CLAUDE_LOC__</text>
+  <rect x="320" y="418" width="170" height="22" rx="11" fill="none" stroke="__READY__"/>
+  <text x="405" y="433" font-size="12" text-anchor="middle" fill="#a16207">vibecode.tours</text>
+</svg>
+TPL
+)"
+    fi
+
+    tpl="${tpl//__CHAPTER__/$CHAPTER}"
+    tpl="${tpl//__HDR_DATE__/$hdr_date}"
+    tpl="${tpl//__PLATFORM__/$PLATFORM}"
+    tpl="${tpl//__CLAUDE_LOC__/$CLAUDE_LOC}"
+    tpl="${tpl//__CHOICE__/$CHOICE}"
+    tpl="${tpl//__USER__/$user}"
+    tpl="${tpl//__PILLS__/$pills}"
+    tpl="${tpl//__ROWS__/$rows}"
+    tpl="${tpl//__CH1__/$ch1svg}"
+    tpl="${tpl//__SCORE__/$checks_pass/$checks_total}"
+    tpl="${tpl//__PASS__/$pass_n}"
+    tpl="${tpl//__FAIL__/$fail_n}"
+    tpl="${tpl//__READY__/$ready}"
+    printf '%s\n' "$tpl" > "$SVG"
   }
   say "Card"; hr
-  if render_claude_svg; then ok "claude rendered svg: $SVG"
-  else render_static_svg; ok "static svg: $SVG"
-  fi
+  render_static_svg; ok "static svg: $SVG"
   make_png() {
     if have rsvg-convert; then rsvg-convert "$SVG" -o "$PNG" 2>/dev/null && return 0; fi
     if have convert;       then convert "$SVG" "$PNG" 2>/dev/null && return 0; fi

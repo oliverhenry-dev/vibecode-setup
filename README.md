@@ -50,10 +50,28 @@ Installs Node, Python, git, gh, librsvg (PNG badge), Claude Code, opencode. Idem
 > writes the proxy config into that install's `.claude/settings.json` — your
 > same `claude` command just works (no split-brain second login).
 
-### Log in to GitHub (`gh auth`)
+### Install + set up GitHub CLI (`gh`)
 
-The script above installs `gh`, but you must log in once. Chapter 1+ homework
-needs it — profile-repo check, website PR, and gist posting all go through `gh`.
+`student-setup.sh` installs `gh` for you. To install it manually:
+
+```bash
+# Linux (Debian/Ubuntu) — official repo; stock apt gh is too old:
+sudo mkdir -p -m 755 /etc/apt/keyrings
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+  | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+sudo apt update && sudo apt install -y gh
+
+# macOS:
+brew install gh
+
+# No apt / blocked region (no sudo needed):
+curl -sS https://webi.sh/gh | sh
+```
+
+Then **log in once** — Chapter 1+ homework needs it (profile-repo check, website
+PR, and gist posting all go through `gh`):
 
 ```bash
 gh auth login
@@ -200,43 +218,47 @@ bash doctor.sh
 ```
 
 Adds a Windows-claude conflict prompt if both WSL and Windows installs exist (recommend
-**REPLACE**). Renders a warm-amber **SVG badge card** via `claude -p` (or a static
-fallback) and converts to PNG.
+**REPLACE**). Renders a warm-amber **badge card** from the static SVG template
+(`card-template.svg`) and converts it to PNG.
 
-**Submit:** drag the PNG into Discord `#ch-0-intro`. An instructor reacts ✅ → the bot
-grants the `ch-0-done` role → `#ch-1` unlocks. If `claude -p` fails, post the SVG or the
-plain `.txt` card; you can also tag `@instructor` and they'll `/unlock @you ch-0`
-manually after fixing the issue.
+**Post it in `#ch-0-intro` (Discord):** drag in the PNG from `~/.vibecode/doctor/`.
+An instructor reacts ✅ → the bot grants the `ch-0-done` role → `#ch-1` unlocks.
+No PNG tool? Post the `.svg` or the plain `.txt` card instead, or tag `@instructor`
+to `/unlock @you ch-0` after fixing the issue.
 
 Useful flags:
 - `--non-interactive` — auto-pick REPLACE on Windows-claude conflict (CI / scripted)
-- `--no-claude` — skip the claude-rendered card, use the static template
 - `--keep` / `--replace` — force the conflict resolution choice
 
 ### Chapter 1 — homework
 
+**1. Create the two things on GitHub first:**
+
+- **Profile repo** — `github.com/<you>/<you>` with a README
+- **Website PR** — a pull request to `vibe-code-tours/vibe-code-tours.github.io`
+
+**2. Run the checker:**
+
 ```bash
-bash doctor.sh ch-1
+bash doctor.sh ch-1          # old name still works: bash check-ch1.sh
 ```
 
-Adds two GitHub checks:
+It checks proxy API, `gh` auth, your profile repo, and your website PR. On **all
+pass** it posts a public gist and prints your submit command. On any ❌, fix the
+listed rows and re-run — the gist is not posted until everything passes.
 
-- Profile repo `github.com/<you>/<you>` exists with a README
-- A pull request to `vibe-code-tours/vibe-code-tours.github.io` by you exists
-
-If everything passes, posts a public gist with the results card and prints the URL.
-
-**Submit:**
+**3. Post it in your cohort channel (Discord or Telegram):**
 
 ```
 /ch1 <gist-url>
 ```
 
-The Discord bot re-verifies the profile repo + PR server-side and marks Chapter 1
-done — no instructor react needed.
+The bot re-verifies the profile repo + PR server-side and marks Chapter 1 done —
+no instructor react needed.
 
 Useful flags:
-- `--no-post` — save the report markdown but skip the gist post
+- `--no-post` — save the report markdown only, skip the gist post
+  (post it manually later: `gh gist create --public ~/.vibecode/doctor/ch-1-report-*.md`)
 
 ### Output artifacts
 

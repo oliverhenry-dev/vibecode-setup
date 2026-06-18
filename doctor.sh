@@ -280,8 +280,10 @@ fi
 # Submission lives in the TEAM repo at ch-3/<you>/report.md; evidence (.mcp/.claude,
 # slides) lives in your PERSONAL project repo. doctor fetches both via gh API — run
 # from anywhere, no clone needed. Mirrors instructor scripts/check-ch3.mjs.
-CH3_MIN_STARS="${CH3_MIN_STARS:-3}"      # team-building: peers ⭐ each other's repos
-CH3_REPORT=fail; CH3_OWNER=fail; CH3_MCP=fail; CH3_SKILL=fail; CH3_AGENT=fail
+CH3_MIN_STARS="${CH3_MIN_STARS:-3}"               # distinct stargazers (excl. owner) — anti ghost/self-star
+CH3_MIN_SKILL_BYTES="${CH3_MIN_SKILL_BYTES:-200}" # anti-stub SKILL.md
+CH3_MIN_AGENT_BYTES="${CH3_MIN_AGENT_BYTES:-100}" # anti-stub agent .md
+CH3_REPORT=fail; CH3_OWNER=fail; CH3_AUTHOR=fail; CH3_MCP=fail; CH3_SKILL=fail; CH3_AGENT=fail
 CH3_SLIDES=fail; CH3_EVIDENCE=fail; CH3_METHOD=fail; CH3_STARS=fail
 CH3_REPO=""; CH3_REPO_URL=""; CH3_SLIDES_URL=""; CH3_SUMMARY=""
 CH3_TEAM_REPO=""; CH3_DIR=""; CH3_STAR_COUNT=0
@@ -320,41 +322,69 @@ if [ "$CHAPTER" = "ch-3" ]; then
         fail "report.md Methodology section is empty"
       fi
 
-      # 2. personal repo meta: owner / stars / default branch in one call
+      # 1b. report.md must be committed BY YOU (anti-forgery: teammates can write the team repo)
+      rep_author=$(gh api "repos/$GH_ORG/$CH3_TEAM_REPO/commits?path=ch-3/$CH3_DIR/report.md&per_page=1" --jq '.[0].author.login // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]')
+      if [ -z "$rep_author" ]; then
+        CH3_AUTHOR=ok; warn "could not verify report.md commit author (commit email not linked to a GitHub account) — instructor will check"
+      elif [ "$rep_author" = "$GH_USER_LC" ]; then
+        CH3_AUTHOR=ok; ok "report committed by you (@$rep_author)"
+      else
+        fail "report.md last committed by @$rep_author, not you (@$GH_USER) — push your own report"
+      fi
+
+      # 2. personal repo: owner check + distinct stargazers (excl. owner) for stars gate
       CH3_REPO=$(printf '%s' "$CH3_REPO_URL" | sed -E 's#(git@|https?://)github.com[:/]##; s/#.*$//; s/\.git$//; s#/+$##')
-      meta=$(gh api "repos/$CH3_REPO" --jq '[.owner.login,(.stargazers_count|tostring),.default_branch]|join("\t")' 2>/dev/null || true)
-      if [ -z "$meta" ]; then
+      repo_owner=$(gh api "repos/$CH3_REPO" --jq '.owner.login' 2>/dev/null || true)
+      if [ -z "$repo_owner" ]; then
         fail "personal repo not found: ${CH3_REPO:-none} (check personal_repo_url)"
       else
-        repo_owner=$(printf '%s' "$meta" | cut -f1)
-        CH3_STAR_COUNT=$(printf '%s' "$meta" | cut -f2)
         repo_owner_lc=$(printf '%s' "$repo_owner" | tr '[:upper:]' '[:lower:]')
         if [ "$repo_owner_lc" = "$GH_USER_LC" ]; then
           CH3_OWNER=ok; ok "repo: github.com/$CH3_REPO (owner @$repo_owner)"
         else
           fail "personal_repo_url owner @$repo_owner != you @$GH_USER — submit your own repo"
         fi
+        # distinct stargazers excluding the owner — one self-star does not count
+        CH3_STAR_COUNT=$(gh api --paginate "repos/$CH3_REPO/stargazers" --jq '.[].login' 2>/dev/null \
+          | tr '[:upper:]' '[:lower:]' | grep -vxF "$repo_owner_lc" | sort -u | grep -c . || true)
         if [ "${CH3_STAR_COUNT:-0}" -ge "$CH3_MIN_STARS" ]; then
-          CH3_STARS=ok; ok "stars: $CH3_STAR_COUNT (>= $CH3_MIN_STARS)"
+          CH3_STARS=ok; ok "stars: $CH3_STAR_COUNT distinct, excl. you (>= $CH3_MIN_STARS)"
         else
-          fail "stars: $CH3_STAR_COUNT (need >= $CH3_MIN_STARS — ask teammates to ⭐ your repo)"
+          fail "stars: $CH3_STAR_COUNT distinct (need >= $CH3_MIN_STARS — ask teammates to ⭐; your own star doesn't count)"
         fi
 
         # 3. evidence: recursive tree of personal repo → .mcp/.claude + claimed paths
         if [ "$(gh api "repos/$CH3_REPO/git/trees/HEAD?recursive=1" --jq '.truncated' 2>/dev/null)" = "true" ]; then
           warn "repo tree too large — GitHub truncated it; evidence/slide checks may be incomplete, instructor will verify manually"
         fi
-        TREE=$(gh api "repos/$CH3_REPO/git/trees/HEAD?recursive=1" --jq '.tree[]|select(.type=="blob")|.path' 2>/dev/null || true)
-        if printf '%s\n' "$TREE" | grep -qE '^\.mcp\.json$|^\.claude/settings[^/]*\.json$'; then CH3_MCP=ok; ok ".mcp.json present"; else fail "no .mcp.json (or .claude/settings*.json) in repo"; fi
-        if printf '%s\n' "$TREE" | grep -qiE '^\.claude/skills/[^/]+/SKILL\.md$'; then CH3_SKILL=ok; ok ".claude/skills/<name>/SKILL.md present"; else fail "no .claude/skills/<name>/SKILL.md in repo"; fi
-        if printf '%s\n' "$TREE" | grep -qiE '^\.claude/agents/[^/]+\.md$'; then CH3_AGENT=ok; ok ".claude/agents/<name>.md present"; else fail "no .claude/agents/<name>.md in repo"; fi
+        TREE=$(gh api "repos/$CH3_REPO/git/trees/HEAD?recursive=1" --jq '.tree[]|select(.type=="blob")|"\(.size)\t\(.path)"' 2>/dev/null || true)
+        TREE_PATHS=$(printf '%s\n' "$TREE" | cut -f2-)
+        # mcp: present AND contains an mcpServers block (not an empty stub)
+        mcp_path=$(printf '%s\n' "$TREE_PATHS" | grep -iE '^\.mcp\.json$|^\.claude/settings[^/]*\.json$' | head -1 || true)
+        if [ -z "$mcp_path" ]; then
+          fail "no .mcp.json (or .claude/settings*.json) in repo"
+        elif gh api "repos/$CH3_REPO/contents/$mcp_path" -H "Accept: application/vnd.github.raw" 2>/dev/null | grep -qiE 'mcp_?servers'; then
+          CH3_MCP=ok; ok "$mcp_path has an mcpServers block"
+        else
+          fail "$mcp_path has no mcpServers entry (empty/stub config)"
+        fi
+        # skill: present AND not a stub (size >= threshold)
+        skill_sz=$(printf '%s\n' "$TREE" | awk -F'\t' 'tolower($2) ~ /^\.claude\/skills\/[^/]+\/skill\.md$/ {print $1; exit}')
+        if [ -z "$skill_sz" ]; then fail "no .claude/skills/<name>/SKILL.md in repo"
+        elif [ "$skill_sz" -ge "$CH3_MIN_SKILL_BYTES" ]; then CH3_SKILL=ok; ok ".claude/skills SKILL.md present (${skill_sz}b)"
+        else fail "SKILL.md too small (${skill_sz}b < ${CH3_MIN_SKILL_BYTES}b — looks like a stub)"; fi
+        # agent: present AND not a stub
+        agent_sz=$(printf '%s\n' "$TREE" | awk -F'\t' 'tolower($2) ~ /^\.claude\/agents\/[^/]+\.md$/ {print $1; exit}')
+        if [ -z "$agent_sz" ]; then fail "no .claude/agents/<name>.md in repo"
+        elif [ "$agent_sz" -ge "$CH3_MIN_AGENT_BYTES" ]; then CH3_AGENT=ok; ok ".claude/agents agent present (${agent_sz}b)"
+        else fail "agent .md too small (${agent_sz}b < ${CH3_MIN_AGENT_BYTES}b — looks like a stub)"; fi
 
         CH3_EVIDENCE=ok; ev_paths=$(grep -E '^- *path:' "$CH3_REPORT_TMP" | sed 's/^- *path:[[:space:]]*//')
         if [ -n "$ev_paths" ]; then
           while IFS= read -r p; do
             [ -z "$p" ] && continue
             case "$p" in '<'*'>') continue;; esac
-            printf '%s\n' "$TREE" | grep -qxF "$p" || { CH3_EVIDENCE=fail; fail "evidence path not in repo: $p"; }
+            printf '%s\n' "$TREE_PATHS" | grep -qxF "$p" || { CH3_EVIDENCE=fail; fail "evidence path not in repo: $p"; }
           done <<EOF2
 $ev_paths
 EOF2
@@ -596,7 +626,7 @@ else
     [ "$CH2_PROPOSAL" != "ok" ] && ch_fail=1
   fi
   if [ "$CHAPTER" = "ch-3" ]; then
-    for v in "$CH3_REPORT" "$CH3_OWNER" "$CH3_MCP" "$CH3_SKILL" "$CH3_AGENT" "$CH3_SLIDES" "$CH3_EVIDENCE" "$CH3_METHOD" "$CH3_STARS"; do
+    for v in "$CH3_REPORT" "$CH3_OWNER" "$CH3_AUTHOR" "$CH3_MCP" "$CH3_SKILL" "$CH3_AGENT" "$CH3_SLIDES" "$CH3_EVIDENCE" "$CH3_METHOD" "$CH3_STARS"; do
       [ "$v" != "ok" ] && ch_fail=1
     done
   fi
@@ -614,8 +644,9 @@ else
     fi
     if [ "$CHAPTER" = "ch-3" ]; then
       echo "- team repo: ${CH3_TEAM_REPO:-none} (ch-3/$CH3_DIR/report.md)"
+      echo "- report author: $CH3_AUTHOR"
       echo "- repo: $CH3_REPO (owner: $CH3_OWNER)"
-      echo "- stars: $CH3_STAR_COUNT (need >= $CH3_MIN_STARS: $CH3_STARS)"
+      echo "- stars: $CH3_STAR_COUNT distinct (need >= $CH3_MIN_STARS: $CH3_STARS)"
       echo "- mcp/skill/agent: $CH3_MCP/$CH3_SKILL/$CH3_AGENT"
       echo "- slides: $CH3_SLIDES ($CH3_SLIDES_URL)"
     fi

@@ -8,7 +8,7 @@
 #   bash doctor.sh ch-0             # explicit ch-0
 #   bash doctor.sh ch-1             # ch-1 homework (profile repo + PR)
 #   bash doctor.sh ch-2             # ch-2 homework (proposal in team repo)
-#   bash doctor.sh ch-3             # ch-3 homework (personal project: mcp+skill+agent, 6×20 slides)
+#   bash doctor.sh ch-3             # ch-3 homework (team-repo report + personal repo: mcp+skill+agent, 6×20 slides, ⭐>=3)
 #
 # Stages (all chapters):
 #   1. detect platform (mac | wsl | linux)
@@ -277,56 +277,111 @@ if [ "$CHAPTER" = "ch-2" ]; then
 fi
 
 # ---------- 6c. chapter 3 — personal project ----------
-# Run INSIDE your personal project repo. Validates report.md + repo contents.
-CH3_REPORT=fail; CH3_REPO=""; CH3_MCP=fail; CH3_SKILL=fail; CH3_AGENT=fail
-CH3_SLIDES=fail; CH3_EVIDENCE=fail; CH3_METHOD=fail
-CH3_REPO_URL=""; CH3_SLIDES_URL=""; CH3_EVIDENCE_PATHS=""
+# Submission lives in the TEAM repo at ch-3/<you>/report.md; evidence (.mcp/.claude,
+# slides) lives in your PERSONAL project repo. doctor fetches both via gh API — run
+# from anywhere, no clone needed. Mirrors instructor scripts/check-ch3.mjs.
+CH3_MIN_STARS="${CH3_MIN_STARS:-3}"      # team-building: peers ⭐ each other's repos
+CH3_REPORT=fail; CH3_OWNER=fail; CH3_MCP=fail; CH3_SKILL=fail; CH3_AGENT=fail
+CH3_SLIDES=fail; CH3_EVIDENCE=fail; CH3_METHOD=fail; CH3_STARS=fail
+CH3_REPO=""; CH3_REPO_URL=""; CH3_SLIDES_URL=""; CH3_SUMMARY=""
+CH3_TEAM_REPO=""; CH3_DIR=""; CH3_STAR_COUNT=0
+CH3_REPORT_TMP="$OUTDIR/ch-3-report-fetched-$TS.md"
 if [ "$CHAPTER" = "ch-3" ]; then
   say "Chapter 3 — personal project"; hr
-  if [ ! -f report.md ]; then
-    fail "no report.md here — copy ch-3/_TEMPLATE.md from your team repo, fill it, run again"
+  if [ -z "$GH_USER" ]; then
+    fail "skipping ch-3 checks — gh not authed (run: gh auth login)"
   else
-    CH3_REPORT=ok; ok "report.md found"
-    CH3_REPO_URL=$(grep -m1 '^personal_repo_url:' report.md | sed 's/^personal_repo_url:[[:space:]]*//')
-    CH3_SLIDES_URL=$(grep -m1 '^slides_url:' report.md | sed 's/^slides_url:[[:space:]]*//')
-    CH3_EVIDENCE_PATHS=$(grep -E '^- *path:' report.md | sed 's/^- *path:[[:space:]]*//')
-    if awk '/^## Methodology/{f=1;next} /^## /{f=0} f && NF && $0 !~ /^<!--/' report.md | grep -q .; then
-      CH3_METHOD=ok; ok "methodology written"
-    else
-      fail "report.md Methodology section is empty"
-    fi
-    REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
-    CH3_REPO=$(printf '%s' "$REMOTE" | sed -E 's#(git@|https?://)github.com[:/]##; s/\.git$//')
-    if [ -n "$GH_USER" ] && [ -n "$CH3_REPO" ] && [ "${CH3_REPO%%/*}" = "$GH_USER" ]; then
-      ok "repo: github.com/$CH3_REPO (owner @$GH_USER)"
-    else
-      fail "git remote owner doesn't match @$GH_USER (remote: ${CH3_REPO:-none}) — push to your own repo"
-    fi
-    if [ -f .mcp.json ] || ls .claude/settings*.json >/dev/null 2>&1; then CH3_MCP=ok; ok ".mcp.json present"; else fail "no .mcp.json (or .claude/settings*.json mcpServers)"; fi
-    if ls .claude/skills/*/SKILL.md >/dev/null 2>&1; then CH3_SKILL=ok; ok ".claude/skills/<name>/SKILL.md present"; else fail "no .claude/skills/<name>/SKILL.md"; fi
-    if ls .claude/agents/*.md >/dev/null 2>&1; then CH3_AGENT=ok; ok ".claude/agents/<name>.md present"; else fail "no .claude/agents/<name>.md"; fi
-    CH3_EVIDENCE=ok
-    if [ -n "$CH3_EVIDENCE_PATHS" ]; then
-      while IFS= read -r p; do
-        [ -z "$p" ] && continue
-        if [ ! -e "$p" ]; then CH3_EVIDENCE=fail; fail "evidence path missing: $p"; fi
-      done <<EOF2
-$CH3_EVIDENCE_PATHS
-EOF2
-      [ "$CH3_EVIDENCE" = ok ] && ok "evidence paths exist"
-    else
-      CH3_EVIDENCE=fail; fail "no evidence '- path:' lines in report.md"
-    fi
-    if [ -n "$CH3_SLIDES_URL" ] && [ -f "$CH3_SLIDES_URL" ]; then
-      sl_seps=$(grep -cE '^---[[:space:]]*$' "$CH3_SLIDES_URL")
-      sl_count=$((sl_seps - 1))
-      if [ "$sl_count" -eq 6 ] && grep -qE '^auto-advance:[[:space:]]*20' "$CH3_SLIDES_URL"; then
-        CH3_SLIDES=ok; ok "slides: 6×20 Marp ($CH3_SLIDES_URL)"
-      else
-        fail "slides must be Marp with 6 slides + 'auto-advance: 20' (found $sl_count slides)"
+    # 1. locate your team repo + ch-3/<you>/ dir (login match is case-insensitive)
+    TEAM_REPOS=$(gh api "orgs/$GH_ORG/repos?per_page=100" --jq '.[].name' 2>/dev/null | grep -E '^team-[0-9]+$' || true)
+    for t in $TEAM_REPOS; do
+      d=$(gh api "repos/$GH_ORG/$t/contents/ch-3" --jq '.[].name' 2>/dev/null | grep -ixF "$GH_USER" | head -1 || true)
+      if [ -n "$d" ] && gh api "repos/$GH_ORG/$t/contents/ch-3/$d/report.md" >/dev/null 2>&1; then
+        CH3_TEAM_REPO="$t"; CH3_DIR="$d"; break
       fi
+    done
+    if [ -z "$CH3_TEAM_REPO" ]; then
+      fail "no ch-3/$GH_USER/report.md in any team repo — copy ch-3/_TEMPLATE.md to ch-3/$GH_USER_LC/report.md, fill it, push (run /repo-access if you have no team repo)"
+    elif gh api "repos/$GH_ORG/$CH3_TEAM_REPO/contents/ch-3/$CH3_DIR/report.md" \
+           -H "Accept: application/vnd.github.raw" > "$CH3_REPORT_TMP" 2>/dev/null \
+         && [ -s "$CH3_REPORT_TMP" ]; then
+      CH3_REPORT=ok; ok "report: $CH3_TEAM_REPO/ch-3/$CH3_DIR/report.md"
     else
-      fail "slides_url file not found: ${CH3_SLIDES_URL:-none}"
+      fail "could not fetch ch-3/$CH3_DIR/report.md from $CH3_TEAM_REPO"
+    fi
+
+    if [ "$CH3_REPORT" = ok ]; then
+      CH3_REPO_URL=$(grep -m1 '^personal_repo_url:' "$CH3_REPORT_TMP" | sed 's/^personal_repo_url:[[:space:]]*//')
+      CH3_SLIDES_URL=$(grep -m1 '^slides_url:' "$CH3_REPORT_TMP" | sed 's/^slides_url:[[:space:]]*//')
+      CH3_SUMMARY=$(grep -m1 '^project_summary:' "$CH3_REPORT_TMP" | sed 's/^project_summary:[[:space:]]*//')
+
+      if awk '/^## Methodology/{f=1;next} /^## /{f=0} f && NF && $0 !~ /^<!--/' "$CH3_REPORT_TMP" | grep -q .; then
+        CH3_METHOD=ok; ok "methodology written"
+      else
+        fail "report.md Methodology section is empty"
+      fi
+
+      # 2. personal repo meta: owner / stars / default branch in one call
+      CH3_REPO=$(printf '%s' "$CH3_REPO_URL" | sed -E 's#(git@|https?://)github.com[:/]##; s/#.*$//; s/\.git$//; s#/+$##')
+      meta=$(gh api "repos/$CH3_REPO" --jq '[.owner.login,(.stargazers_count|tostring),.default_branch]|join("\t")' 2>/dev/null || true)
+      if [ -z "$meta" ]; then
+        fail "personal repo not found: ${CH3_REPO:-none} (check personal_repo_url)"
+      else
+        repo_owner=$(printf '%s' "$meta" | cut -f1)
+        CH3_STAR_COUNT=$(printf '%s' "$meta" | cut -f2)
+        repo_owner_lc=$(printf '%s' "$repo_owner" | tr '[:upper:]' '[:lower:]')
+        if [ "$repo_owner_lc" = "$GH_USER_LC" ]; then
+          CH3_OWNER=ok; ok "repo: github.com/$CH3_REPO (owner @$repo_owner)"
+        else
+          fail "personal_repo_url owner @$repo_owner != you @$GH_USER — submit your own repo"
+        fi
+        if [ "${CH3_STAR_COUNT:-0}" -ge "$CH3_MIN_STARS" ]; then
+          CH3_STARS=ok; ok "stars: $CH3_STAR_COUNT (>= $CH3_MIN_STARS)"
+        else
+          fail "stars: $CH3_STAR_COUNT (need >= $CH3_MIN_STARS — ask teammates to ⭐ your repo)"
+        fi
+
+        # 3. evidence: recursive tree of personal repo → .mcp/.claude + claimed paths
+        TREE=$(gh api "repos/$CH3_REPO/git/trees/HEAD?recursive=1" --jq '.tree[]|select(.type=="blob")|.path' 2>/dev/null || true)
+        if printf '%s\n' "$TREE" | grep -qE '^\.mcp\.json$|^\.claude/settings[^/]*\.json$'; then CH3_MCP=ok; ok ".mcp.json present"; else fail "no .mcp.json (or .claude/settings*.json) in repo"; fi
+        if printf '%s\n' "$TREE" | grep -qiE '^\.claude/skills/[^/]+/SKILL\.md$'; then CH3_SKILL=ok; ok ".claude/skills/<name>/SKILL.md present"; else fail "no .claude/skills/<name>/SKILL.md in repo"; fi
+        if printf '%s\n' "$TREE" | grep -qiE '^\.claude/agents/[^/]+\.md$'; then CH3_AGENT=ok; ok ".claude/agents/<name>.md present"; else fail "no .claude/agents/<name>.md in repo"; fi
+
+        CH3_EVIDENCE=ok; ev_paths=$(grep -E '^- *path:' "$CH3_REPORT_TMP" | sed 's/^- *path:[[:space:]]*//')
+        if [ -n "$ev_paths" ]; then
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            case "$p" in '<'*'>') continue;; esac
+            printf '%s\n' "$TREE" | grep -qxF "$p" || { CH3_EVIDENCE=fail; fail "evidence path not in repo: $p"; }
+          done <<EOF2
+$ev_paths
+EOF2
+          [ "$CH3_EVIDENCE" = ok ] && ok "evidence paths exist in repo"
+        else
+          CH3_EVIDENCE=fail; fail "no evidence '- path:' lines in report.md"
+        fi
+
+        # 4. slides: slides_url is a repo-relative path (normalize blob/raw URLs),
+        #    fetch raw from the personal repo, require Marp 6 slides + auto-advance:20
+        sp="$CH3_SLIDES_URL"
+        case "$sp" in
+          http*://github.com/*/blob/*)         sp="${sp#*://github.com/*/blob/}"; sp="${sp#*/}" ;;
+          http*://raw.githubusercontent.com/*) sp="${sp#*://raw.githubusercontent.com/}"; sp="${sp#*/}"; sp="${sp#*/}"; sp="${sp#*/}" ;;
+        esac
+        if [ -z "$sp" ]; then
+          fail "slides_url empty in report.md"
+        elif gh api "repos/$CH3_REPO/contents/$sp" -H "Accept: application/vnd.github.raw" > "$OUTDIR/ch3-slides-$TS.md" 2>/dev/null && [ -s "$OUTDIR/ch3-slides-$TS.md" ]; then
+          slf="$OUTDIR/ch3-slides-$TS.md"
+          fm=$(awk 'NR==1&&$0=="---"{f=1;next} f&&$0=="---"{exit} f{print}' "$slf")
+          sl_count=$(awk 'NR==1&&$0=="---"{infm=1;next} infm&&$0=="---"{infm=0;body=1;prev="";next} infm{next} {if($0 ~ /^---[ \t]*$/ && prev==""){s++} prev=$0} END{if(body)print s+1; else print 0}' "$slf")
+          if printf '%s\n' "$fm" | grep -qE '^marp:[[:space:]]*true' && [ "${sl_count:-0}" -eq 6 ] && printf '%s\n' "$fm" | grep -qE '^auto-advance:[[:space:]]*20'; then
+            CH3_SLIDES=ok; ok "slides: 6×20 Marp ($sp)"
+          else
+            fail "slides must be Marp (marp: true) with 6 slides + 'auto-advance: 20' (found ${sl_count:-0} slides at $sp)"
+          fi
+        else
+          fail "slides not found in repo at: ${sp:-none} (slides_url must be a repo-relative path)"
+        fi
+      fi
     fi
   fi
 fi
@@ -343,6 +398,11 @@ if [ "$CHAPTER" = "ch-2" ]; then
   CH2_JSON="  \"ch2\": { \"proposal\": \"$CH2_PROPOSAL\", \"team_repo\": \"$CH2_TEAM_REPO\" },
 "
 fi
+CH3_JSON=""
+if [ "$CHAPTER" = "ch-3" ]; then
+  CH3_JSON="  \"ch3\": { \"team_repo\": \"$CH3_TEAM_REPO\", \"repo\": \"$CH3_REPO\", \"owner\": \"$CH3_OWNER\", \"stars\": \"$CH3_STAR_COUNT\", \"min_stars\": \"$CH3_MIN_STARS\", \"mcp\": \"$CH3_MCP\", \"skill\": \"$CH3_SKILL\", \"agent\": \"$CH3_AGENT\", \"slides\": \"$CH3_SLIDES\", \"evidence\": \"$CH3_EVIDENCE\", \"methodology\": \"$CH3_METHOD\" },
+"
+fi
 cat > "$JSON" <<EOF
 {
   "ts": "$TS",
@@ -357,7 +417,7 @@ cat > "$JSON" <<EOF
   },
   "gh": { "auth": "$GH_AUTH", "pr_probe": "$GH_PR" },
   "proxy_api": "$CL_API",
-${CH1_JSON}${CH2_JSON}  "score": "$checks_pass/$checks_total"
+${CH1_JSON}${CH2_JSON}${CH3_JSON}  "score": "$checks_pass/$checks_total"
 }
 EOF
 ok "results json: $JSON"
@@ -533,10 +593,9 @@ else
     [ "$CH2_PROPOSAL" != "ok" ] && ch_fail=1
   fi
   if [ "$CHAPTER" = "ch-3" ]; then
-    for v in "$CH3_REPORT" "$CH3_MCP" "$CH3_SKILL" "$CH3_AGENT" "$CH3_SLIDES" "$CH3_EVIDENCE" "$CH3_METHOD"; do
+    for v in "$CH3_REPORT" "$CH3_OWNER" "$CH3_MCP" "$CH3_SKILL" "$CH3_AGENT" "$CH3_SLIDES" "$CH3_EVIDENCE" "$CH3_METHOD" "$CH3_STARS"; do
       [ "$v" != "ok" ] && ch_fail=1
     done
-    [ "${CH3_REPO%%/*}" != "$GH_USER" ] && ch_fail=1
   fi
   {
     echo "# ${CHAPTER} check — $(date -u '+%Y-%m-%d %H:%M UTC')"
@@ -551,7 +610,9 @@ else
       echo "- team proposal: $CH2_PROPOSAL (${CH2_TEAM_REPO:-no-team-repo})"
     fi
     if [ "$CHAPTER" = "ch-3" ]; then
-      echo "- repo: $CH3_REPO"
+      echo "- team repo: ${CH3_TEAM_REPO:-none} (ch-3/$CH3_DIR/report.md)"
+      echo "- repo: $CH3_REPO (owner: $CH3_OWNER)"
+      echo "- stars: $CH3_STAR_COUNT (need >= $CH3_MIN_STARS: $CH3_STARS)"
       echo "- mcp/skill/agent: $CH3_MCP/$CH3_SKILL/$CH3_AGENT"
       echo "- slides: $CH3_SLIDES ($CH3_SLIDES_URL)"
     fi
@@ -563,13 +624,14 @@ else
     if [ "$CHAPTER" = "ch-3" ]; then
       echo "personal_repo_url: $CH3_REPO_URL"
       echo "slides_url: $CH3_SLIDES_URL"
-      echo "project_summary: $(grep -m1 '^project_summary:' report.md | sed 's/^project_summary:[[:space:]]*//')"
+      echo "stars: $CH3_STAR_COUNT"
+      echo "project_summary: $CH3_SUMMARY"
       echo
       echo "## Methodology"
-      awk '/^## Methodology/{f=1;next} /^## /{f=0} f' report.md
+      awk '/^## Methodology/{f=1;next} /^## /{f=0} f' "$CH3_REPORT_TMP"
       echo
       echo "## Evidence"
-      grep -E '^- *path:' report.md
+      grep -E '^- *path:' "$CH3_REPORT_TMP"
     fi
     echo "result: $([ "$ch_fail" -eq 0 ] && echo PASS || echo INCOMPLETE)"
   } > "$MD"
